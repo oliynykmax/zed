@@ -5,7 +5,7 @@ use std::{any::Any, ops::Range};
 use gpui::{App, Context, Entity, HighlightStyle, KeyContext, UnderlineStyle, Window, px};
 use language::Buffer;
 use lean_abbreviations::{Abbreviations, Change, Config, Replacement, Rewriter, place_cursors};
-use multi_buffer::MultiBufferOffset;
+use multi_buffer::{Anchor, MultiBufferOffset, MultiBufferSnapshot, ToOffset as _};
 use settings::{RegisterSetting, Settings};
 
 use crate::{
@@ -207,6 +207,31 @@ fn move_cursors_to_markers(
     });
 }
 
+/// How to type the Lean 4 symbols that start at `anchor`, as Markdown, and the text they cover.
+pub(crate) fn abbreviation_hover(
+    buffer: &MultiBufferSnapshot,
+    anchor: Anchor,
+    cx: &App,
+) -> Option<(String, Range<Anchor>)> {
+    let offset = anchor.to_offset(buffer);
+    if !buffer
+        .language_at(offset)
+        .is_some_and(|language| is_lean_language(language))
+    {
+        return None;
+    }
+    let config = &LeanInputSettings::get_global(cx).config;
+    let line: String = buffer.chars_at(offset).take_while(|c| *c != '\n').collect();
+    let symbols = config.abbreviations.symbols_at(&line);
+    let len = symbols.iter().map(|input| input.symbol.len()).max()?;
+    let markdown = symbols
+        .iter()
+        .map(|input| input.hover_markdown(&config.leader))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Some((markdown, anchor..buffer.anchor_after(offset + len)))
+}
+
 fn underline(editor: &mut Editor, pending: Vec<Range<usize>>, cx: &mut Context<Editor>) {
     if pending.is_empty() {
         editor.clear_highlights(HighlightKey::LeanAbbreviation, cx);
@@ -244,7 +269,12 @@ mod tests {
     use settings::SettingsStore;
 
     use super::*;
-    use crate::{editor_tests::init_test, test::editor_test_context::EditorTestContext};
+    use crate::{
+        editor_tests::init_test,
+        test::{
+            editor_lsp_test_context::EditorLspTestContext, editor_test_context::EditorTestContext,
+        },
+    };
 
     async fn lean_editor(cx: &mut TestAppContext) -> EditorTestContext {
         init_test(cx, |_| {});
@@ -336,6 +366,74 @@ mod tests {
         cx.set_state("ˇ");
         cx.simulate_input("\\alpha ");
         cx.assert_editor_state("\\alpha ˇ");
+    }
+
+    #[gpui::test]
+    async fn hovers_how_to_type_a_symbol_next_to_the_server_hover(cx: &mut TestAppContext) {
+        init_test(cx, |_| {});
+        let lean = Language::new(
+            LanguageConfig {
+                name: "Lean 4".into(),
+                matcher: language::LanguageMatcher {
+                    path_suffixes: vec!["lean".into()],
+                    ..Default::default()
+                }
+                .into(),
+                ..LanguageConfig::default()
+            },
+            None,
+        );
+        let mut cx = EditorLspTestContext::new(
+            lean,
+            lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..Default::default()
+            },
+            cx,
+        )
+        .await;
+        cx.set_request_handler::<lsp::request::HoverRequest, _, _>(|_, _, _| async {
+            Ok(Some(lsp::Hover {
+                contents: lsp::HoverContents::Markup(lsp::MarkupContent {
+                    kind: lsp::MarkupKind::Markdown,
+                    value: "anonymous constructor".into(),
+                }),
+                range: None,
+            }))
+        });
+        cx.set_state("ˇ⟨a, b⟩");
+
+        let hovers = |cx: &mut EditorLspTestContext, offset: usize| {
+            cx.update_editor(|editor, window, cx| {
+                let anchor = editor
+                    .buffer()
+                    .read(cx)
+                    .snapshot(cx)
+                    .anchor_before(MultiBufferOffset(offset));
+                editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+                    s.select_anchor_ranges([anchor..anchor])
+                });
+                crate::hover_popover::hover(editor, &crate::Hover, window, cx);
+            });
+            cx.run_until_parked();
+            cx.editor(|editor, _, cx| {
+                editor
+                    .hover_state
+                    .info_popovers
+                    .iter()
+                    .filter_map(|popover| popover.parsed_content.as_ref())
+                    .map(|markdown| markdown.read(cx).source().to_string())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(
+            hovers(&mut cx, 0),
+            [
+                "anonymous constructor",
+                "Type ⟨ using `\\<` or `\\langle`. ⟨ can be auto-closed with ⟩ using `\\<>`."
+            ]
+        );
+        assert_eq!(hovers(&mut cx, "⟨".len()), ["anonymous constructor"]);
     }
 
     #[gpui::test]

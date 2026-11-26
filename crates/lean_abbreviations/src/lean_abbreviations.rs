@@ -6,4 +6,4 @@ mod rewriter;
 mod table;
 
 pub use rewriter::{Change, Config, Replacement, Rewriter, place_cursors};
-pub use table::Abbreviations;
+pub use table::{Abbreviations, SymbolInput};

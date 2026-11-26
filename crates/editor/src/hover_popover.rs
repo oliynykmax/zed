@@ -280,6 +280,8 @@ fn show_hover(
     let active_group_id = editor.active_diagnostic_group_id();
 
     let renderer = GlobalDiagnosticRenderer::global(cx);
+    let lean_symbols =
+        crate::lean_input::abbreviation_hover(snapshot.buffer_snapshot(), anchor, cx);
     let task = cx.spawn_in(window, async move |this, cx| {
         async move {
             // If we need to delay, delay a set amount initially before making the lsp request
@@ -575,6 +577,35 @@ fn show_hover(
                     parsed_content: Some(parsed_content),
                     debugger_hover: None,
                     scroll_handle,
+                    keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
+                    anchor: Some(anchor),
+                    last_bounds: Rc::new(Cell::new(None)),
+                    _subscriptions: subscriptions,
+                });
+            }
+
+            if !show_debugger_hover_only && let Some((markdown, range)) = lean_symbols {
+                let blocks = [HoverBlock {
+                    text: markdown,
+                    kind: HoverBlockKind::Markdown,
+                }];
+                let parsed_content = parse_blocks(&blocks, language_registry.as_ref(), None, cx);
+                let subscriptions = this
+                    .update(cx, |_, cx| {
+                        parsed_content
+                            .iter()
+                            .map(|parsed_content| {
+                                cx.observe(parsed_content, |_, _, cx| cx.notify())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                info_popovers.push(InfoPopover {
+                    symbol_range: RangeInEditor::Text(range),
+                    fallback_state: None,
+                    parsed_content,
+                    debugger_hover: None,
+                    scroll_handle: ScrollHandle::new(),
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),

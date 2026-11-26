@@ -108,6 +108,89 @@ impl Abbreviations {
     }
 }
 
+/// How to type a symbol: the abbreviations that produce exactly it, and those that
+/// produce it with a closing symbol after the cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolInput<'a> {
+    pub symbol: &'a str,
+    pub abbreviations: Vec<&'a str>,
+    /// Each abbreviation with the closing symbol it puts after the cursor.
+    pub closings: Vec<(&'a str, &'a str)>,
+}
+
+impl Abbreviations {
+    /// How to type each symbol that `text` starts with, in table order.
+    pub fn symbols_at(&self, text: &str) -> Vec<SymbolInput<'_>> {
+        let mut symbols: Vec<&str> = Vec::new();
+        for (_, symbol) in &self.entries {
+            // An empty symbol would show at every character.
+            if !symbol.is_empty()
+                && text.starts_with(symbol.as_str())
+                && !symbols.contains(&&**symbol)
+            {
+                symbols.push(symbol);
+            }
+        }
+        symbols
+            .into_iter()
+            .map(|symbol| self.symbol_input(symbol))
+            .collect()
+    }
+
+    fn symbol_input<'a>(&'a self, symbol: &'a str) -> SymbolInput<'a> {
+        let opening = format!("{symbol}{CURSOR}");
+        SymbolInput {
+            symbol,
+            abbreviations: self
+                .entries
+                .iter()
+                .filter(|(_, existing)| existing == symbol)
+                .map(|(abbreviation, _)| abbreviation.as_str())
+                .collect(),
+            closings: self
+                .entries
+                .iter()
+                .filter_map(|(abbreviation, existing)| {
+                    Some((abbreviation.as_str(), existing.strip_prefix(&opening)?))
+                })
+                .collect(),
+        }
+    }
+}
+
+const CURSOR: &str = "$CURSOR";
+
+impl SymbolInput<'_> {
+    /// The hover text vscode-lean4 shows, such as "Type ⟨ using `\<` or `\langle`".
+    pub fn hover_markdown(&self, leader: &str) -> String {
+        let code = |abbreviation: &str| markdown_code(&format!("{leader}{abbreviation}"));
+        let abbreviations: Vec<_> = self.abbreviations.iter().map(|a| code(a)).collect();
+        let mut markdown = format!("Type {} using {}", self.symbol, abbreviations.join(" or "));
+        if !self.closings.is_empty() {
+            let closings: Vec<_> = self
+                .closings
+                .iter()
+                .map(|(abbreviation, closing)| format!("{closing} using {}", code(abbreviation)))
+                .collect();
+            markdown.push_str(&format!(
+                ". {} can be auto-closed with {}.",
+                self.symbol,
+                closings.join(" or ")
+            ));
+        }
+        markdown
+    }
+}
+
+fn markdown_code(text: &str) -> String {
+    if !text.contains('`') {
+        return format!("`{text}`");
+    }
+    let prefix = if text.starts_with('`') { " " } else { "" };
+    let suffix = if text.ends_with('`') { " " } else { "" };
+    format!("``{prefix}{text}{suffix}``")
+}
+
 fn array_index(key: &str) -> Option<u32> {
     let canonical =
         key == "0" || (!key.starts_with('0') && key.bytes().all(|b| b.is_ascii_digit()));
@@ -161,6 +244,49 @@ mod tests {
         assert_eq!(
             &table.symbols_with_prefix("[]")[..2],
             ["[$CURSOR]", "[$CURSOR]_"]
+        );
+    }
+
+    #[test]
+    fn explains_how_to_type_the_symbols_at_a_position() {
+        let table = Abbreviations::bundled();
+        let markdown: Vec<_> = table
+            .symbols_at("⟨a, b⟩")
+            .iter()
+            .map(|input| input.hover_markdown("\\"))
+            .collect();
+        assert_eq!(
+            markdown,
+            ["Type ⟨ using `\\<` or `\\langle`. ⟨ can be auto-closed with ⟩ using `\\<>`."]
+        );
+        assert_eq!(
+            table.symbols_at("α + 1"),
+            [SymbolInput {
+                symbol: "α",
+                abbreviations: vec!["a", "alpha", "Ga"],
+                closings: vec![],
+            }]
+        );
+        assert_eq!(table.symbols_at("x"), []);
+        assert_eq!(table.symbols_at(""), []);
+    }
+
+    #[test]
+    fn lists_every_symbol_that_starts_the_text() {
+        let table = Abbreviations::with_custom([("ninv", "ℕ⁻¹"), ("tick", "`")]);
+        let symbols: Vec<_> = table
+            .symbols_at("ℕ⁻¹")
+            .into_iter()
+            .map(|input| input.symbol)
+            .collect();
+        assert_eq!(symbols, ["ℕ", "ℕ⁻¹"]);
+        assert_eq!(
+            table.symbols_at("`")[0].hover_markdown(","),
+            "Type ` using `,tick`"
+        );
+        assert_eq!(
+            Abbreviations::with_custom([("t", "`x")]).symbols_at("`x")[0].hover_markdown("`"),
+            "Type `x using `` `t``"
         );
     }
 
