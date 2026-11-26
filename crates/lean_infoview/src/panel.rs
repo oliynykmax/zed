@@ -1,13 +1,19 @@
-use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
 use editor::{Editor, EditorEvent};
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
-    Action, App, AsyncWindowContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, Pixels, Render, Subscription, Task, WeakEntity, Window, actions, div, prelude::*,
-    px,
+    Action, App, AsyncWindowContext, Bounds, ClipboardItem, Context, DismissEvent, Entity,
+    EventEmitter, FocusHandle, Focusable, Pixels, Render, Subscription, Task, WeakEntity, Window,
+    anchored, canvas, deferred, div, point, prelude::*, px,
 };
 use language::{Buffer, LocalFile as _, Point, PointUtf16, ToPointUtf16 as _, Unclipped};
 use lsp::{LanguageServer, LanguageServerId};
@@ -27,30 +33,25 @@ use serde_json::{Value, json};
 use settings::{Settings as _, SettingsStore};
 use theme::ActiveTheme as _;
 use theme_settings::ThemeSettings;
-use ui::{IconName, Label, LabelCommon as _, LabelSize};
+use ui::{ContextMenu, IconName, Label, LabelCommon as _, LabelSize};
 use workspace::{
     OpenOptions, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
 };
 
 use crate::{
+    CopyToComment, ToggleAllMessages, ToggleExpectedType, ToggleInfoview, TogglePaused, TogglePin,
     assets,
+    context_menu::{MenuGroup, OfferedEntry, offered_entries},
     host::{HostState, RpcSession},
     protocol::{
-        CallError, CallId, CallResult, EditorCall, InfoviewCall, LogLevel, PageAppearance,
-        PageMessage, ServerStoppedReason, TextInsertKind, appearance_script, reply_script,
+        CallError, CallId, CallResult, EditorCall, InfoviewActionKind, InfoviewCall, LogLevel,
+        PageAppearance, PageMessage, ServerStoppedReason, TextInsertKind, appearance_script,
+        reply_script,
     },
     theme_css::{self, PageFonts},
     web_view::{Resource, WebView, WebViewEvent},
 };
-
-actions!(
-    lean,
-    [
-        /// Opens or closes the Lean InfoView panel.
-        ToggleInfoview
-    ]
-);
 
 const LEAN_LANGUAGE_NAME: &str = "Lean 4";
 const KEEP_ALIVE_PERIOD: Duration = Duration::from_secs(10);
@@ -73,8 +74,32 @@ pub fn init(cx: &mut App) {
                 workspace.open_panel::<LeanInfoviewPanel>(window, cx);
             }
         });
+        register_infoview_action::<ToggleAllMessages>(
+            workspace,
+            InfoviewActionKind::ToggleAllMessages,
+        );
+        register_infoview_action::<TogglePaused>(workspace, InfoviewActionKind::TogglePaused);
+        register_infoview_action::<TogglePin>(workspace, InfoviewActionKind::TogglePin);
+        register_infoview_action::<CopyToComment>(workspace, InfoviewActionKind::CopyToComment);
+        register_infoview_action::<ToggleExpectedType>(
+            workspace,
+            InfoviewActionKind::ToggleExpectedType,
+        );
     })
     .detach();
+}
+
+fn register_infoview_action<A: Action>(workspace: &mut Workspace, kind: InfoviewActionKind) {
+    workspace.register_action(move |workspace, _: &A, window, cx| {
+        let Some(panel) = workspace.panel::<LeanInfoviewPanel>(cx) else {
+            return;
+        };
+        // Like vscode-lean4's "Toggle All Messages", which shows the infoview first.
+        if kind == InfoviewActionKind::ToggleAllMessages {
+            workspace.open_panel::<LeanInfoviewPanel>(window, cx);
+        }
+        panel.update(cx, |panel, _| panel.request_action(kind));
+    });
 }
 
 pub struct LeanInfoviewPanel {
@@ -91,9 +116,18 @@ pub struct LeanInfoviewPanel {
     cursor: Option<CursorSource>,
     config: Option<Value>,
     theme_css: Rc<RefCell<String>>,
+    /// Where the page is in the window, to place its context menu.
+    page_bounds: Rc<Cell<Bounds<Pixels>>>,
+    context_menu: Option<DeployedContextMenu>,
     notifications: mpsc::UnboundedSender<(LanguageServerId, ObservedNotification)>,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
+}
+
+struct DeployedContextMenu {
+    menu: Entity<ContextMenu>,
+    position: gpui::Point<Pixels>,
+    _dismiss: Subscription,
 }
 
 struct ServerTap {
@@ -118,6 +152,8 @@ struct Page {
     state: PageState,
     /// Calls the page is waiting on, dropped to cancel them.
     calls: HashMap<CallId, Task<()>>,
+    /// Actions requested before the page was initialized.
+    requested: Vec<InfoviewActionKind>,
     _messages: Task<()>,
 }
 
@@ -225,6 +261,8 @@ impl LeanInfoviewPanel {
             cursor: None,
             config: None,
             theme_css: Rc::default(),
+            page_bounds: Rc::default(),
+            context_menu: None,
             notifications,
             _tasks: vec![forward_notifications, keep_alive],
             _subscriptions: subscriptions,
@@ -383,8 +421,21 @@ impl LeanInfoviewPanel {
             )));
         }
         calls.push(InfoviewCall::ChangedCursorLocation(Some(cursor.location)));
+        calls.extend(page.requested.drain(..).map(InfoviewCall::RequestedAction));
         for call in calls {
             page.evaluate(call.script());
+        }
+    }
+
+    fn request_action(&mut self, kind: InfoviewActionKind) {
+        let Some(page) = &mut self.page else {
+            return;
+        };
+        match page.state {
+            PageState::Ready {
+                initialized: true, ..
+            } => page.evaluate(InfoviewCall::RequestedAction(kind).script()),
+            _ => page.requested.push(kind),
         }
     }
 
@@ -455,7 +506,13 @@ impl LeanInfoviewPanel {
                 return;
             }
         };
-        web_view.native_view().reserve_action::<ToggleInfoview>();
+        let native_view = web_view.native_view();
+        native_view.reserve_action::<ToggleInfoview>();
+        native_view.reserve_action::<ToggleAllMessages>();
+        native_view.reserve_action::<TogglePaused>();
+        native_view.reserve_action::<TogglePin>();
+        native_view.reserve_action::<CopyToComment>();
+        native_view.reserve_action::<ToggleExpectedType>();
         web_view
             .native_view()
             .set_background(cx.theme().colors().panel_background, cx);
@@ -476,6 +533,7 @@ impl LeanInfoviewPanel {
             web_view,
             state: PageState::Loading,
             calls: HashMap::default(),
+            requested: Vec::new(),
             _messages: receive_messages,
         });
         cx.notify();
@@ -510,7 +568,66 @@ impl LeanInfoviewPanel {
                 LogLevel::Error => log::error!("Lean infoview: {message}"),
                 LogLevel::Warn => log::warn!("Lean infoview: {message}"),
             },
+            PageMessage::ContextMenu {
+                context,
+                selection,
+                x,
+                y,
+            } => {
+                let position = self.page_bounds.get().origin + point(px(x), px(y));
+                self.deploy_context_menu(
+                    offered_entries(&context),
+                    selection,
+                    position,
+                    window,
+                    cx,
+                );
+            }
         }
+    }
+
+    fn deploy_context_menu(
+        &mut self,
+        entries: Vec<OfferedEntry>,
+        selection: String,
+        position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if entries.is_empty() && selection.is_empty() {
+            self.context_menu = None;
+            cx.notify();
+            return;
+        }
+        let this = cx.weak_entity();
+        let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
+            if !selection.is_empty() {
+                menu = menu.entry("Copy", None, move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(selection.clone()))
+                });
+            }
+            let (settings, main): (Vec<_>, Vec<_>) = entries.into_iter().partition(|offered| {
+                matches!(offered.group, MenuGroup::Settings | MenuGroup::SaveSettings)
+            });
+            menu = add_entries(menu, &this, &main);
+            if !settings.is_empty() {
+                menu = menu.separator().submenu("Settings…", move |menu, _, _| {
+                    add_entries(menu, &this, &settings)
+                });
+            }
+            menu
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        let dismiss = cx.subscribe(&menu, |panel, _, _: &DismissEvent, cx| {
+            panel.context_menu = None;
+            cx.notify();
+        });
+        self.context_menu = Some(DeployedContextMenu {
+            menu,
+            position,
+            _dismiss: dismiss,
+        });
+        cx.notify();
     }
 
     fn page_ready(&mut self, cx: &mut Context<Self>) {
@@ -775,6 +892,34 @@ impl LeanInfoviewPanel {
     }
 }
 
+/// Adds the entries, with a separator wherever the group changes.
+fn add_entries(
+    mut menu: ContextMenu,
+    panel: &WeakEntity<LeanInfoviewPanel>,
+    entries: &[OfferedEntry],
+) -> ContextMenu {
+    let mut group = entries.first().map(|offered| offered.group);
+    for offered in entries {
+        if group != Some(offered.group) {
+            group = Some(offered.group);
+            menu = menu.separator();
+        }
+        let panel = panel.clone();
+        let (entry, id) = (offered.entry, offered.id.clone());
+        menu = menu.entry(offered.label, None, move |_, cx| {
+            panel
+                .update(cx, |panel, _| {
+                    panel.send(InfoviewCall::ClickedContextMenu {
+                        entry,
+                        id: id.clone(),
+                    })
+                })
+                .ok();
+        });
+    }
+    menu
+}
+
 fn active_editor(workspace: &Workspace, cx: &App) -> Option<Entity<Editor>> {
     workspace
         .active_item(cx)
@@ -928,11 +1073,28 @@ impl Render for LeanInfoviewPanel {
                 )
                 .into_any_element(),
         };
+        let page_bounds = self.page_bounds.clone();
         div()
+            .key_context("LeanInfoview")
             .track_focus(&self.focus_handle)
+            .relative()
             .size_full()
             .bg(cx.theme().colors().panel_background)
+            .child(
+                canvas(move |bounds, _, _| page_bounds.set(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
             .child(content)
+            .children(self.context_menu.as_ref().map(|deployed| {
+                deferred(
+                    anchored()
+                        .position(deployed.position)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(deployed.menu.clone()),
+                )
+                .with_priority(1)
+            }))
     }
 }
 

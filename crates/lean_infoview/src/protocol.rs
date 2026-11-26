@@ -5,7 +5,9 @@
 
 use project::lsp_store::lean_ext::{NotificationDirection, RpcSessionId};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, value::RawValue};
+use serde_json::{Map, Value, value::RawValue};
+
+use crate::context_menu::ContextMenuEntry;
 
 /// Numbers a call from the page, so that its reply and cancellation can name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -27,6 +29,15 @@ pub enum PageMessage {
     Log {
         level: LogLevel,
         message: String,
+    },
+    /// The user asked for a context menu, at a position in the page.
+    ContextMenu {
+        /// The `data-vscode-context` of the clicked element and its ancestors, the
+        /// closest element's value winning for each key.
+        context: Map<String, Value>,
+        selection: String,
+        x: f32,
+        y: f32,
     },
 }
 
@@ -127,6 +138,17 @@ pub struct ServerStoppedReason {
     pub reason: String,
 }
 
+/// An infoview command that the editor triggers, such as from a key binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InfoviewActionKind {
+    ToggleAllMessages,
+    TogglePaused,
+    TogglePin,
+    CopyToComment,
+    ToggleExpectedType,
+}
+
 /// A call into the infoview's `InfoviewApi`.
 #[derive(Debug)]
 pub enum InfoviewCall {
@@ -144,6 +166,11 @@ pub enum InfoviewCall {
     ServerRestarted(Value),
     ServerStopped(Option<ServerStoppedReason>),
     ChangedInfoviewConfig(Value),
+    RequestedAction(InfoviewActionKind),
+    ClickedContextMenu {
+        entry: ContextMenuEntry,
+        id: Value,
+    },
 }
 
 impl InfoviewCall {
@@ -170,6 +197,14 @@ impl InfoviewCall {
             Self::ChangedInfoviewConfig(config) => {
                 ("changedInfoviewConfig", serde_json::to_string(&(config,))?)
             }
+            Self::RequestedAction(kind) => (
+                "requestedAction",
+                serde_json::to_string(&(serde_json::json!({ "kind": kind }),))?,
+            ),
+            Self::ClickedContextMenu { entry, id } => (
+                "clickedContextMenu",
+                serde_json::to_string(&(serde_json::json!({ "entry": entry, "id": id }),))?,
+            ),
         };
         Ok(format!("window.zedInfoview.call(\"{method}\",{args})"))
     }
@@ -270,6 +305,17 @@ mod tests {
                 message: "slow".into()
             }
         );
+        assert_eq!(
+            parse(
+                r#"{"kind":"contextMenu","context":{"pinId":"2"},"selection":"","x":10,"y":20.5}"#
+            ),
+            PageMessage::ContextMenu {
+                context: json!({"pinId": "2"}).as_object().unwrap().clone(),
+                selection: String::new(),
+                x: 10.,
+                y: 20.5,
+            }
+        );
     }
 
     #[test]
@@ -368,6 +414,21 @@ mod tests {
         assert_eq!(
             InfoviewCall::ServerStopped(None).script().unwrap(),
             r#"window.zedInfoview.call("serverStopped",[null])"#
+        );
+        assert_eq!(
+            InfoviewCall::RequestedAction(InfoviewActionKind::ToggleAllMessages)
+                .script()
+                .unwrap(),
+            r#"window.zedInfoview.call("requestedAction",[{"kind":"toggleAllMessages"}])"#
+        );
+        assert_eq!(
+            InfoviewCall::ClickedContextMenu {
+                entry: ContextMenuEntry::CopyState,
+                id: json!("goals-3"),
+            }
+            .script()
+            .unwrap(),
+            r#"window.zedInfoview.call("clickedContextMenu",[{"entry":"copyState","id":"goals-3"}])"#
         );
     }
 

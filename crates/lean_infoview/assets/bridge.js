@@ -39,6 +39,23 @@ window.addEventListener('unhandledrejection', event => {
     post({ kind: 'log', level: 'error', message: String(reason?.stack ?? reason?.message ?? reason) })
 })
 
+// Zed shows the infoview's own entries instead of WebKit's menu, as VS Code does.
+document.addEventListener('contextmenu', event => {
+    event.preventDefault()
+    const context = {}
+    for (let element = event.target; element instanceof Element; element = element.parentElement) {
+        const data = element.getAttribute('data-vscode-context')
+        if (data === null) continue
+        try {
+            for (const [key, value] of Object.entries(JSON.parse(data))) {
+                if (!(key in context)) context[key] = value
+            }
+        } catch {}
+    }
+    const selection = window.getSelection()?.toString() ?? ''
+    post({ kind: 'contextMenu', context, selection, x: event.clientX, y: event.clientY })
+})
+
 const editorApi = {
     saveConfig: config => invoke('saveConfig', { config }),
     sendClientRequest(uri, method, params, options) {

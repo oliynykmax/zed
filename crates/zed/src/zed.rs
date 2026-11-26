@@ -6300,6 +6300,7 @@ mod tests {
                 "keymap_editor",
                 "keystroke_input",
                 "language_selector",
+                "lean",
                 "welcome",
                 "line_ending_selector",
                 "lsp_command_selector",

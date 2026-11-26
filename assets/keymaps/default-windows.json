@@ -889,6 +889,15 @@
     },
   },
   {
+    "context": "(Editor && extension == lean) || LeanInfoview",
+    "bindings": {
+      "ctrl-shift-alt-enter": "lean::ToggleAllMessages",
+      "ctrl-alt-p": "lean::TogglePaused",
+      "ctrl-alt-k": "lean::TogglePin",
+      "ctrl-alt-c": "lean::CopyToComment",
+    },
+  },
+  {
     "context": "Editor && showing_code_actions",
     "use_key_equivalents": true,
     "bindings": {
