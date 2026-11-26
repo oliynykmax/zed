@@ -13,7 +13,7 @@ use project::{
     lsp_command::file_path_to_lsp_url,
     lsp_store::lean_ext::{
         LEAN_SERVER_NAME, LeanFileProgress, LeanFileProgressKind, LeanFileProgressParams,
-        LeanFileProgressProcessingInfo, NotificationDirection, observe_notifications,
+        LeanFileProgressProcessingInfo, observe_server_notifications,
     },
 };
 use text::Bias;
@@ -126,20 +126,16 @@ fn follow(
         return;
     };
     let (progress_tx, mut progress_rx) = mpsc::unbounded();
-    let notifications = observe_notifications(&server, move |notification| {
-        if notification.direction != NotificationDirection::FromServer
-            || notification.method != LeanFileProgress::METHOD
-        {
-            return;
-        }
-        match serde_json::from_str::<LeanFileProgressParams>(notification.params.get()) {
-            Ok(params) if params.text_document.uri == uri => {
-                progress_tx.unbounded_send(params.processing).ok();
+    let notifications =
+        observe_server_notifications(&server, LeanFileProgress::METHOD, move |params| {
+            match serde_json::from_str::<LeanFileProgressParams>(params.get()) {
+                Ok(params) if params.text_document.uri == uri => {
+                    progress_tx.unbounded_send(params.processing).ok();
+                }
+                Ok(_) => {}
+                Err(error) => log::warn!("unexpected Lean file progress: {error}"),
             }
-            Ok(_) => {}
-            Err(error) => log::warn!("unexpected Lean file progress: {error}"),
-        }
-    });
+        });
     let updates = cx.spawn_in(window, async move |editor, cx| {
         while let Some(mut processing) = progress_rx.next().await {
             while let Ok(newer) = progress_rx.try_recv() {

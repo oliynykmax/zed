@@ -331,6 +331,37 @@ pub fn parse_notification(kind: IoKind, message: &str) -> Option<ObservedNotific
     })
 }
 
+/// Returns the params of `message` if it is a `method` notification from the server. A
+/// substring check skips most other messages without parsing them.
+pub fn parse_server_notification(
+    kind: IoKind,
+    message: &str,
+    method: &str,
+) -> Option<Box<RawValue>> {
+    // The last segment, because a server may escape the slashes.
+    let name = method.rsplit('/').next().unwrap_or(method);
+    if !matches!(kind, IoKind::StdOut) || !message.contains(name) {
+        return None;
+    }
+    parse_notification(kind, message)
+        .filter(|notification| notification.method == method)
+        .map(|notification| notification.params)
+}
+
+/// Calls `f` with the params of each `method` notification the server sends.
+#[must_use]
+pub fn observe_server_notifications(
+    server: &LanguageServer,
+    method: &'static str,
+    mut f: impl FnMut(Box<RawValue>) + Send + 'static,
+) -> lsp::Subscription {
+    server.on_io(move |kind, message| {
+        if let Some(params) = parse_server_notification(kind, message, method) {
+            f(params);
+        }
+    })
+}
+
 /// Calls `f` with each notification the server sends or receives. Zed's own handlers still run.
 #[must_use]
 pub fn observe_notifications(
@@ -395,6 +426,25 @@ mod tests {
         assert_eq!(
             parse_notification(IoKind::StdOut, message).unwrap().method,
             "$/lean/fileProgress"
+        );
+    }
+
+    #[test]
+    fn picks_one_notification_from_the_server() {
+        let progress =
+            r#"{"jsonrpc":"2.0","method":"$\/lean\/fileProgress","params":{"processing":[]}}"#;
+        assert_eq!(
+            parse_server_notification(IoKind::StdOut, progress, "$/lean/fileProgress")
+                .unwrap()
+                .get(),
+            r#"{"processing":[]}"#
+        );
+        assert!(
+            parse_server_notification(IoKind::StdIn, progress, "$/lean/fileProgress").is_none()
+        );
+        let diagnostics = r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///fileProgress.lean"}}"#;
+        assert!(
+            parse_server_notification(IoKind::StdOut, diagnostics, "$/lean/fileProgress").is_none()
         );
     }
 
