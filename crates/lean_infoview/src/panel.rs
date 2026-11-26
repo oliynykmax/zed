@@ -41,7 +41,7 @@ use crate::{
         PageMessage, ServerStoppedReason, TextInsertKind, appearance_script, reply_script,
     },
     theme_css::{self, PageFonts},
-    web_view::{Resource, WebView},
+    web_view::{Resource, WebView, WebViewEvent},
 };
 
 actions!(
@@ -426,7 +426,7 @@ impl LeanInfoviewPanel {
     }
 
     fn open_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (messages, mut received) = mpsc::unbounded();
+        let (events, mut received) = mpsc::unbounded();
         let theme_css = self.theme_css.clone();
         let fonts = cx.asset_source().clone();
         let resolve = Box::new(move |path: &str| match path {
@@ -448,7 +448,7 @@ impl LeanInfoviewPanel {
                 }),
             },
         });
-        let web_view = match WebView::new(resolve, messages, window, cx) {
+        let web_view = match WebView::new(resolve, events, window, cx) {
             Ok(web_view) => web_view,
             Err(error) => {
                 log::error!("failed to create the Lean infoview: {error:#}");
@@ -460,9 +460,12 @@ impl LeanInfoviewPanel {
             .native_view()
             .set_background(cx.theme().colors().panel_background, cx);
         let receive_messages = cx.spawn_in(window, async move |this, cx| {
-            while let Some(message) = received.next().await {
-                let handled = this.update_in(cx, |panel, window, cx| {
-                    panel.handle_page_message(&message, window, cx)
+            while let Some(event) = received.next().await {
+                let handled = this.update_in(cx, |panel, window, cx| match event {
+                    WebViewEvent::Message(message) => {
+                        panel.handle_page_message(&message, window, cx)
+                    }
+                    WebViewEvent::Link(url) => cx.open_url(&url),
                 });
                 if handled.is_err() {
                     break;
@@ -514,6 +517,8 @@ impl LeanInfoviewPanel {
         let Some(page) = &mut self.page else {
             return;
         };
+        self.host.page_loaded();
+        page.calls.clear();
         page.state = PageState::Ready {
             initialized: false,
             announced: None,

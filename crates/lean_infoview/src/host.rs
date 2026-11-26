@@ -111,6 +111,15 @@ impl HostState {
         Ok(())
     }
 
+    /// Forgets what an earlier page subscribed to and stored. Its RPC sessions expire
+    /// on the server once their keep-alives stop.
+    pub fn page_loaded(&mut self) {
+        self.subscriptions.clear();
+        self.rpc_sessions.clear();
+        self.persistent_state
+            .retain(|(container, _), _| *container != StateContainer::Infoview);
+    }
+
     pub fn server_removed(&mut self, server: LanguageServerId) {
         self.servers.remove(&server);
         self.rpc_sessions
@@ -426,6 +435,39 @@ mod tests {
         assert_eq!(
             host.read_state(StateContainer::Workspace, "k".into()),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn forgets_the_previous_page_when_a_page_loads() {
+        let mut host = HostState::default();
+        host.subscribe(
+            NotificationDirection::FromServer,
+            PUBLISH_DIAGNOSTICS.into(),
+        );
+        host.open_rpc_session(
+            RpcSessionId("1".into()),
+            RpcSession {
+                server: LanguageServerId(1),
+                uri: A.parse().unwrap(),
+            },
+        );
+        host.save_state(StateContainer::Infoview, "k".into(), json!(1));
+        host.save_state(StateContainer::Workspace, "k".into(), json!(2));
+
+        host.page_loaded();
+        assert!(
+            host.observe(LanguageServerId(1), diagnostics(A, "after"))
+                .is_none()
+        );
+        assert_eq!(host.keep_alives(), vec![]);
+        assert_eq!(
+            host.read_state(StateContainer::Infoview, "k".into()),
+            Value::Null
+        );
+        assert_eq!(
+            host.read_state(StateContainer::Workspace, "k".into()),
+            json!({"value": 2})
         );
     }
 }

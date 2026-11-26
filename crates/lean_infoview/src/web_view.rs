@@ -20,6 +20,13 @@ pub const SCHEME: &str = "zed-lean-infoview";
 const PAGE_URL: &str = "zed-lean-infoview://infoview/index.html";
 const MESSAGE_HANDLER: &str = "zed";
 
+pub enum WebViewEvent {
+    /// A string the page posted to `window.webkit.messageHandlers.zed`.
+    Message(String),
+    /// A web link the page tried to follow, which belongs in the browser.
+    Link(String),
+}
+
 pub struct Resource {
     pub mime_type: Cow<'static, str>,
     pub bytes: Cow<'static, [u8]>,
@@ -30,7 +37,7 @@ pub type Resolve = Box<dyn Fn(&str) -> Option<Resource>>;
 
 struct HandlerIvars {
     resolve: Resolve,
-    messages: mpsc::UnboundedSender<String>,
+    events: mpsc::UnboundedSender<WebViewEvent>,
 }
 
 define_class!(
@@ -58,10 +65,50 @@ define_class!(
                 return;
             };
             // Nothing is receiving once the panel is gone.
-            self.ivars().messages.unbounded_send(body.to_string()).ok();
+            self.ivars()
+                .events
+                .unbounded_send(WebViewEvent::Message(body.to_string()))
+                .ok();
+        }
+
+        #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
+        fn decide_policy_for_navigation_action(
+            &self,
+            _web_view: &AnyObject,
+            action: &AnyObject,
+            decision_handler: &block2::DynBlock<dyn Fn(isize)>,
+        ) {
+            const CANCEL: isize = 0;
+            const ALLOW: isize = 1;
+            // SAFETY: WebKit passes a live `WKNavigationAction`.
+            let url = unsafe { navigation_url(action) };
+            match url.filter(|url| is_web_link(url)) {
+                Some(url) => {
+                    self.ivars().events.unbounded_send(WebViewEvent::Link(url)).ok();
+                    decision_handler.call((CANCEL,));
+                }
+                None => decision_handler.call((ALLOW,)),
+            }
         }
     }
 );
+
+/// # Safety
+///
+/// `action` must be a live `WKNavigationAction`.
+unsafe fn navigation_url(action: &AnyObject) -> Option<String> {
+    unsafe {
+        let request: Retained<AnyObject> = msg_send![action, request];
+        let url: Option<Retained<NSURL>> = msg_send![&*request, URL];
+        Some(url?.absoluteString()?.to_string())
+    }
+}
+
+fn is_web_link(url: &str) -> bool {
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
+}
 
 impl Handler {
     fn new(ivars: HandlerIvars) -> Retained<Self> {
@@ -120,15 +167,14 @@ pub struct WebView {
 }
 
 impl WebView {
-    /// Creates the view and starts loading the page. Every string the page posts to
-    /// `window.webkit.messageHandlers.zed` arrives on `messages`.
+    /// Creates the view and starts loading the page.
     pub fn new(
         resolve: Resolve,
-        messages: mpsc::UnboundedSender<String>,
+        events: mpsc::UnboundedSender<WebViewEvent>,
         window: &mut Window,
         cx: &mut App,
     ) -> Result<Self> {
-        let handler = Handler::new(HandlerIvars { resolve, messages });
+        let handler = Handler::new(HandlerIvars { resolve, events });
         // SAFETY: These are WebKit classes from the linked framework, and GPUI creates
         // views on the main thread.
         let web_view = unsafe {
@@ -153,6 +199,9 @@ impl WebView {
             ];
             // Without this, the web view paints the system's text background where
             // the page has not painted yet, which shows as a sliver while it resizes.
+            // The web view keeps its navigation delegate weakly. The configuration and
+            // content controller above keep the handler alive.
+            let _: () = msg_send![&*web_view, setNavigationDelegate: &*handler];
             let draws_background: Retained<AnyObject> =
                 msg_send![class!(NSNumber), numberWithBool: false];
             let _: () = msg_send![
@@ -209,5 +258,21 @@ impl Drop for WebView {
                 removeScriptMessageHandlerForName: &*NSString::from_str(MESSAGE_HANDLER)
             ];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sends_only_web_links_to_the_browser() {
+        assert!(is_web_link(
+            "https://leanprover-community.github.io/mathlib4_docs"
+        ));
+        assert!(is_web_link("mailto:someone@example.com"));
+        assert!(!is_web_link("zed-lean-infoview://infoview/index.html"));
+        assert!(!is_web_link("about:blank"));
+        assert!(!is_web_link("blob:zed-lean-infoview://infoview/1234"));
     }
 }
