@@ -939,6 +939,12 @@
     },
   },
   {
+    "context": "Editor && lean_abbreviation && !showing_completions",
+    "bindings": {
+      "tab": "editor::ConvertLeanAbbreviation",
+    },
+  },
+  {
     "context": "Editor && showing_code_actions",
     "use_key_equivalents": true,
     "bindings": {

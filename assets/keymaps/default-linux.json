@@ -888,6 +888,12 @@
     },
   },
   {
+    "context": "Editor && lean_abbreviation && !showing_completions",
+    "bindings": {
+      "tab": "editor::ConvertLeanAbbreviation",
+    },
+  },
+  {
     "context": "Editor && showing_code_actions",
     "bindings": {
       "enter": "editor::ConfirmCodeAction",

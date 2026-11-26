@@ -24,7 +24,7 @@ use crate::{
 
 const REFRESH_DEBOUNCE: Duration = Duration::from_millis(100);
 
-fn is_lean_language(language: &Language) -> bool {
+pub(crate) fn is_lean_language(language: &Language) -> bool {
     language.name() == "Lean 4"
 }
 
@@ -39,6 +39,7 @@ pub fn apply_related_actions(editor: &Entity<Editor>, window: &mut Window, cx: &
         .any(|language| is_lean_language(&language))
     {
         register_action(editor, window, show_lean_goal);
+        register_action(editor, window, crate::lean_input::convert);
     }
 }
 

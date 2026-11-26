@@ -5,6 +5,7 @@ mod extension;
 mod fallible_options;
 mod language;
 mod language_model;
+mod lean;
 pub mod merge_from;
 mod project;
 mod serde_helper;
@@ -21,6 +22,7 @@ pub use extension::*;
 pub use fallible_options::*;
 pub use language::*;
 pub use language_model::*;
+pub use lean::*;
 pub use merge_from::MergeFrom as MergeFromTrait;
 pub use project::*;
 use serde::de::DeserializeOwned;
@@ -262,6 +264,8 @@ pub struct SettingsContent {
 
     pub journal: Option<JournalSettingsContent>,
 
+    pub lean: Option<LeanSettingsContent>,
+
     /// A map of log scopes to the desired log level.
     /// Useful for filtering out noisy logs or enabling more verbose logging.
     ///
@@ -410,7 +414,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
-        journal, log, line_indicator_format, language_models, copilot, outline_panel, project_panel,
+        journal, lean, log, line_indicator_format, language_models, copilot, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
         title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
         instrumentation,

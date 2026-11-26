@@ -134,6 +134,7 @@ members = [
     "crates/language_selector",
     "crates/language_tools",
     "crates/languages",
+    "crates/lean_abbreviations",
     "crates/lean_infoview",
     "crates/line_ending_selector",
     "crates/livekit_api",
@@ -414,6 +415,7 @@ language_onboarding = { path = "crates/language_onboarding" }
 language_selector = { path = "crates/language_selector" }
 language_tools = { path = "crates/language_tools" }
 languages = { path = "crates/languages" }
+lean_abbreviations = { path = "crates/lean_abbreviations" }
 lean_infoview = { path = "crates/lean_infoview" }
 line_ending_selector = { path = "crates/line_ending_selector" }
 livekit_api = { path = "crates/livekit_api" }

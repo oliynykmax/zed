@@ -37,6 +37,7 @@ mod inline_input;
 pub mod items;
 mod jsx_tag_auto_close;
 mod lean_ext;
+mod lean_input;
 mod linked_editing_ranges;
 mod lsp_ext;
 mod mouse_context_menu;
@@ -366,6 +367,7 @@ pub fn init(cx: &mut App) {
     workspace::register_project_item::<Editor>(cx);
     workspace::FollowableViewRegistry::register::<Editor>(cx);
     workspace::register_serializable_item::<Editor>(cx);
+    lean_input::init(cx);
 
     cx.observe_new(
         |workspace: &mut Workspace, window: Option<&mut Window>, cx: &mut Context<Workspace>| {

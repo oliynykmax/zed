@@ -2066,6 +2066,22 @@
     // 2. hour24
     "hour_format": "hour12",
   },
+  // Settings for Lean 4 files.
+  "lean": {
+    // Unicode input, which turns abbreviations such as \alpha into symbols such as α.
+    "input": {
+      // Whether typing the leader in a Lean 4 file starts an abbreviation.
+      "enabled": true,
+      // The text that starts an abbreviation.
+      "leader": "\\",
+      // Whether to replace an abbreviation as soon as it is complete and no longer
+      // abbreviation starts with it.
+      "eager_replacement": true,
+      // More abbreviations, written without the leader, and the symbols they produce.
+      // $CURSOR marks where the cursor goes.
+      "custom_translations": {},
+    },
+  },
   // Status bar-related settings.
   "status_bar": {
     // Whether to show the status bar.

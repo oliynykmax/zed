@@ -1,0 +1,1 @@
+`abbreviations.json` is copied unchanged from [`@leanprover/unicode-input`](https://github.com/leanprover/vscode-lean4/tree/9ac77ca57bf7b7ee5907269142a5bef979aa15bf/lean4-unicode-input) in vscode-lean4, Copyright the vscode-lean4 contributors, under the Apache License 2.0 in `LICENSE-APACHE`. `../script/vendor-abbreviations` updates it.

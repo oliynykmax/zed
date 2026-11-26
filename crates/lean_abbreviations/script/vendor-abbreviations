@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Copies the pinned vscode-lean4 abbreviation table and its license into vendor/.
+set -euo pipefail
+
+commit="9ac77ca57bf7b7ee5907269142a5bef979aa15bf"
+sha256="fa5e317d4d481c8bf12d6438e489376931c18438dd0a68af3683a4cb9e92b5b0"
+base="https://raw.githubusercontent.com/leanprover/vscode-lean4/$commit/lean4-unicode-input"
+
+out="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vendor"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+curl -fsSL "$base/src/abbreviations.json" -o "$work/abbreviations.json"
+curl -fsSL "$base/LICENSE" -o "$work/LICENSE-APACHE"
+actual="$(shasum -a 256 "$work/abbreviations.json" | cut -d' ' -f1)"
+if [[ "$actual" != "$sha256" ]]; then
+    echo "checksum mismatch for abbreviations.json: $actual" >&2
+    exit 1
+fi
+cp "$work/abbreviations.json" "$work/LICENSE-APACHE" "$out/"

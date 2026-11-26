@@ -467,6 +467,8 @@ actions!(
         ConvertIndentationToSpaces,
         /// Converts indentation from spaces to tabs.
         ConvertIndentationToTabs,
+        /// Replaces the Lean 4 abbreviations being typed with their symbols.
+        ConvertLeanAbbreviation,
         /// Converts selected text to kebab-case.
         ConvertToKebabCase,
         /// Converts selected text to lowerCamelCase.
