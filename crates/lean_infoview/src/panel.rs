@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
-use collections::{HashMap, HashSet};
+use collections::HashMap;
 use editor::{Editor, EditorEvent};
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
@@ -765,12 +765,13 @@ impl LeanInfoviewPanel {
         Ok(())
     }
 
-    fn restart_file(&self, uri: &lsp::Uri, cx: &mut Context<Self>) -> Result<()> {
+    fn restart_file(&self, uri: &lsp::Uri, cx: &App) -> Result<()> {
         let buffer = open_buffer(&self.project, uri, cx).context("the file is not open")?;
-        self.project.update(cx, |project, cx| {
-            project.restart_language_servers_for_buffers(vec![buffer], HashSet::default(), cx)
-        });
-        Ok(())
+        self.project
+            .read(cx)
+            .lsp_store()
+            .read(cx)
+            .restart_lean_file(buffer.read(cx), cx)
     }
 }
 

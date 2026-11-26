@@ -1,9 +1,18 @@
 use std::time::Duration;
 
 use ::serde::{Deserialize, Serialize};
+use anyhow::{Context as _, Result};
 use futures::{FutureExt as _, future::LocalBoxFuture};
+use gpui::App;
+use language::{Buffer, LocalFile as _};
 use lsp::{IoKind, LanguageServer, LanguageServerName};
 use serde_json::{Value, value::RawValue};
+
+use crate::{
+    File,
+    lsp_command::file_path_to_lsp_url,
+    lsp_store::{LanguageServerState, LspStore},
+};
 
 pub const LEAN_SERVER_NAME: LanguageServerName = LanguageServerName::new_static("lean4-lsp");
 
@@ -62,6 +71,71 @@ pub struct RpcKeepAliveParams {
 impl lsp::notification::Notification for RpcKeepAlive {
     type Params = RpcKeepAliveParams;
     const METHOD: &'static str = "$/lean/rpc/keepAlive";
+}
+
+/// `textDocument/didOpen`, with how the Lean server builds the file's outdated imports.
+pub enum LeanDidOpen {}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeanDidOpenParams {
+    pub text_document: lsp::TextDocumentItem,
+    pub dependency_build_mode: DependencyBuildMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DependencyBuildMode {
+    Always,
+    Once,
+    Never,
+}
+
+impl lsp::notification::Notification for LeanDidOpen {
+    type Params = LeanDidOpenParams;
+    const METHOD: &'static str = "textDocument/didOpen";
+}
+
+impl LspStore {
+    /// Makes the Lean server elaborate a file from scratch, building its outdated imports
+    /// once, by closing and reopening it as vscode-lean4 does.
+    pub fn restart_lean_file(&self, buffer: &Buffer, cx: &App) -> Result<()> {
+        let local = self
+            .as_local()
+            .context("only local projects can restart Lean files")?;
+        let abs_path = File::from_dyn(buffer.file())
+            .context("the buffer is not a file")?
+            .abs_path(cx);
+        let language = buffer.language().context("the buffer has no language")?;
+        let (server, adapter, sent) = local
+            .buffer_snapshots
+            .get(&buffer.remote_id())
+            .into_iter()
+            .flatten()
+            .find_map(
+                |(server_id, snapshots)| match local.language_servers.get(server_id)? {
+                    LanguageServerState::Running {
+                        server, adapter, ..
+                    } if server.name() == LEAN_SERVER_NAME => {
+                        Some((server, adapter, snapshots.last()?))
+                    }
+                    _ => None,
+                },
+            )
+            .context("no Lean server has the file open")?;
+        let uri = file_path_to_lsp_url(&abs_path)?;
+        server.unregister_buffer(uri.clone());
+        // Keeps the version Zed last sent, which its later changes count up from.
+        server.notify::<LeanDidOpen>(LeanDidOpenParams {
+            text_document: lsp::TextDocumentItem::new(
+                uri,
+                adapter.language_id(&language.name()),
+                sent.version,
+                sent.snapshot.text_with_line_endings(),
+            ),
+            dependency_build_mode: DependencyBuildMode::Once,
+        })
+    }
 }
 
 /// A request that the Lean infoview sends through the editor, with untyped params.

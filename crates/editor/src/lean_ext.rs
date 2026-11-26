@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context as _;
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
-    App, AppContext as _, AsyncWindowContext, Context, Entity, TaskExt, WeakEntity, Window,
+    App, AppContext as _, AsyncWindowContext, Context, Entity, TaskExt, WeakEntity, Window, actions,
 };
 use language::{Capability, Language, LocalFile as _};
 use lsp::LanguageServer;
@@ -15,12 +15,21 @@ use project::{
 };
 use settings::Settings as _;
 use text::ToPointUtf16 as _;
-use workspace::SplitDirection;
+use workspace::{SplitDirection, notifications::NotifyResultExt as _};
 
 use crate::{
     Editor, EditorEvent, ShowLeanGoal, element::register_action,
     lsp_ext::find_specific_language_server_in_selection,
 };
+
+actions!(
+    lean,
+    [
+        /// Makes the Lean server elaborate the current file from scratch, building its
+        /// outdated imports first.
+        RestartFile
+    ]
+);
 
 const REFRESH_DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -40,7 +49,33 @@ pub fn apply_related_actions(editor: &Entity<Editor>, window: &mut Window, cx: &
     {
         register_action(editor, window, show_lean_goal);
         register_action(editor, window, crate::lean_input::convert);
+        register_action(editor, window, restart_file);
     }
+}
+
+fn restart_file(editor: &mut Editor, _: &RestartFile, _: &mut Window, cx: &mut Context<Editor>) {
+    let (Some(project), Some(workspace)) = (editor.project.clone(), editor.workspace()) else {
+        return;
+    };
+    let head = editor.selections.newest_anchor().head();
+    let Some((buffer, _)) = editor.buffer().read(cx).text_anchor_for_position(head, cx) else {
+        return;
+    };
+    if !buffer
+        .read(cx)
+        .language()
+        .is_some_and(|language| is_lean_language(language))
+    {
+        return;
+    }
+    let restarted = project
+        .read(cx)
+        .lsp_store()
+        .read(cx)
+        .restart_lean_file(buffer.read(cx), cx);
+    workspace.update(cx, |workspace, cx| {
+        restarted.notify_err(workspace, cx);
+    });
 }
 
 fn show_lean_goal(
@@ -165,4 +200,53 @@ async fn request_plain_goal(
         .await
         .into_response()
         .context("$/lean/plainGoal")
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+    use language::{FakeLspAdapter, LanguageConfig, LanguageMatcher};
+    use project::lsp_store::lean_ext::{DependencyBuildMode, LeanDidOpen};
+
+    use super::*;
+    use crate::{editor_tests::init_test, test::editor_lsp_test_context::EditorLspTestContext};
+
+    #[gpui::test]
+    async fn restart_file_reopens_the_document_in_the_lean_server(cx: &mut TestAppContext) {
+        init_test(cx, |_| {});
+        let lean = Language::new(
+            LanguageConfig {
+                name: "Lean 4".into(),
+                matcher: LanguageMatcher {
+                    path_suffixes: vec!["lean".into()],
+                    ..Default::default()
+                }
+                .into(),
+                ..LanguageConfig::default()
+            },
+            None,
+        );
+        let mut cx = EditorLspTestContext::new_with_adapter(
+            lean,
+            FakeLspAdapter {
+                name: "lean4-lsp",
+                ..FakeLspAdapter::default()
+            },
+            cx,
+        )
+        .await;
+        cx.set_state("theorem t : True := ˇtrivial");
+        cx.run_until_parked();
+
+        cx.dispatch_action(RestartFile);
+        let closed = cx
+            .lsp
+            .receive_notification::<lsp::notification::DidCloseTextDocument>()
+            .await;
+        assert_eq!(closed.text_document.uri, cx.buffer_lsp_url);
+        let reopened = cx.lsp.receive_notification::<LeanDidOpen>().await;
+        assert_eq!(reopened.text_document.uri, cx.buffer_lsp_url);
+        assert_eq!(reopened.text_document.text, "theorem t : True := trivial");
+        assert_eq!(reopened.dependency_build_mode, DependencyBuildMode::Once);
+    }
 }

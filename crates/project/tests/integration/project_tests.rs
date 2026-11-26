@@ -8,6 +8,7 @@ mod debugger;
 mod dynamic_registration;
 mod git_store;
 mod image_store;
+mod lean_ext;
 mod lsp_command;
 mod lsp_store;
 mod manifest_tree;
