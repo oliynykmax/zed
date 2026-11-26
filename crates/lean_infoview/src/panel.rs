@@ -32,7 +32,7 @@ use project::{
 };
 use serde_json::{Value, json};
 use settings::{Settings as _, SettingsStore};
-use theme::ActiveTheme as _;
+use theme::{ActiveTheme as _, GlobalTheme};
 use theme_settings::ThemeSettings;
 use ui::{ContextMenu, IconName, Label, LabelCommon as _, LabelSize};
 use workspace::{
@@ -267,6 +267,7 @@ impl LeanInfoviewPanel {
                 panel.update_theme(cx);
                 panel.update_config(cx);
             }),
+            cx.observe_global_in::<GlobalTheme>(window, |panel, _, cx| panel.update_theme(cx)),
         ];
 
         let mut panel = Self {
