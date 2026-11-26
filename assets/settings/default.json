@@ -2081,6 +2081,41 @@
       // $CURSOR marks where the cursor goes.
       "custom_translations": {},
     },
+    // The Lean InfoView panel. Its "Save Current Settings to Default Settings" writes
+    // the display settings below.
+    "infoview": {
+      // Whether the InfoView opens by itself for the first Lean 4 file.
+      "auto_open": true,
+      // Whether the InfoView, when it opens by itself, shows the goal and messages at the
+      // cursor instead of all messages of the file.
+      "auto_open_shows_goal": true,
+      // Whether to show all errors on the cursor's line, not only those to its right.
+      "all_errors_on_line": true,
+      // How long, in milliseconds, the InfoView waits after the cursor stops before updating.
+      "debounce_time": 50,
+      // How the expected type shows at first: "expanded_by_default",
+      // "collapsed_by_default" or "hidden".
+      "expected_type_visibility": "expanded_by_default",
+      // Whether to show goal names, such as `case inl`.
+      "show_goal_names": true,
+      // Whether to show goals other than the main goal in a smaller font.
+      "emphasize_first_goal": false,
+      // Whether to show the goal before the local context.
+      "reverse_tactic_state": false,
+      // Whether to hide type assumptions from the local context.
+      "hide_type_assumptions": false,
+      // Whether to hide instance assumptions from the local context.
+      "hide_instance_assumptions": false,
+      // Whether to hide inaccessible assumptions from the local context.
+      "hide_inaccessible_assumptions": false,
+      // Whether to hide the values of let-bound assumptions.
+      "hide_let_values": false,
+      // Whether hovering an expression shows its tooltip. Otherwise a click does.
+      "show_tooltip_on_hover": true,
+      // How to sort "All Messages": "sort_by_proximity_to_cursor" or
+      // "sort_by_message_location".
+      "message_order": "sort_by_proximity_to_cursor",
+    },
   },
   // Status bar-related settings.
   "status_bar": {

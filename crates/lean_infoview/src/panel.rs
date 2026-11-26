@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
+use db::kvp::KeyValueStore;
 use editor::{Editor, EditorEvent};
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
@@ -45,10 +46,11 @@ use crate::{
     context_menu::{MenuGroup, OfferedEntry, offered_entries},
     host::{HostState, RpcSession},
     protocol::{
-        CallError, CallId, CallResult, EditorCall, InfoviewActionKind, InfoviewCall, LogLevel,
-        PageAppearance, PageMessage, ServerStoppedReason, TextInsertKind, appearance_script,
-        reply_script,
+        CallError, CallId, CallResult, EditorCall, InfoviewActionKind, InfoviewCall,
+        InfoviewConfig, LogLevel, PageAppearance, PageMessage, ServerStoppedReason, StateContainer,
+        TextInsertKind, appearance_script, reply_script,
     },
+    settings::LeanInfoviewSettings,
     theme_css::{self, PageFonts},
     web_view::{Resource, WebView, WebViewEvent},
 };
@@ -108,13 +110,18 @@ pub struct LeanInfoviewPanel {
     focus_handle: FocusHandle,
     position: DockPosition,
     active: bool,
-    /// Like VS Code, the panel opens by itself for the first Lean file, once.
+    /// Like VS Code, the panel opens by itself for the first Lean file, once, unless the
+    /// `auto_open` setting says otherwise.
     auto_opened: bool,
     page: Option<Page>,
     host: HostState,
     servers: HashMap<LanguageServerId, ServerTap>,
     cursor: Option<CursorSource>,
-    config: Option<Value>,
+    /// The config last sent to the page.
+    config: Option<InfoviewConfig>,
+    /// The key-value store key of the infoview's `workspace` state, once read from it.
+    workspace_state_key: Option<String>,
+    state_writes: mpsc::UnboundedSender<(String, String)>,
     theme_css: Rc<RefCell<String>>,
     /// Where the page is in the window, to place its context menu.
     page_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -213,6 +220,15 @@ impl LeanInfoviewPanel {
                 }
             }
         });
+        let (state_writes, mut pending_writes) = mpsc::unbounded::<(String, String)>();
+        let db = KeyValueStore::global(cx);
+        let write_state = cx.background_spawn(async move {
+            while let Some((key, value)) = pending_writes.next().await {
+                if let Err(error) = db.write_kvp(key, value).await {
+                    log::error!("failed to store the Lean infoview's workspace state: {error:#}");
+                }
+            }
+        });
         let keep_alive = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(KEEP_ALIVE_PERIOD).await;
@@ -245,6 +261,7 @@ impl LeanInfoviewPanel {
             ),
             cx.observe_global_in::<SettingsStore>(window, |panel, _, cx| {
                 panel.update_theme(cx);
+                panel.update_config(cx);
             }),
         ];
 
@@ -260,11 +277,13 @@ impl LeanInfoviewPanel {
             servers: HashMap::default(),
             cursor: None,
             config: None,
+            workspace_state_key: None,
+            state_writes,
             theme_css: Rc::default(),
             page_bounds: Rc::default(),
             context_menu: None,
             notifications,
-            _tasks: vec![forward_notifications, keep_alive],
+            _tasks: vec![forward_notifications, keep_alive, write_state],
             _subscriptions: subscriptions,
         };
         let running: Vec<_> = lsp_store
@@ -364,8 +383,7 @@ impl LeanInfoviewPanel {
             editor: editor.downgrade(),
             _events: events,
         });
-        if !self.auto_opened {
-            self.auto_opened = true;
+        if !self.auto_opened && LeanInfoviewSettings::get_global(cx).auto_open {
             let workspace = self.workspace.clone();
             window.defer(cx, move |window, cx| {
                 workspace
@@ -375,6 +393,7 @@ impl LeanInfoviewPanel {
                     .ok();
             });
         }
+        self.auto_opened = true;
         self.sync_page(cx);
     }
 
@@ -642,11 +661,81 @@ impl LeanInfoviewPanel {
         };
         page.web_view
             .evaluate(&appearance_script(page_appearance(cx)));
-        if let Some(config) = self.config.clone() {
-            page.evaluate(InfoviewCall::ChangedInfoviewConfig(config).script());
-        }
+        let config = LeanInfoviewSettings::get_global(cx).config.clone();
+        page.evaluate(InfoviewCall::ChangedInfoviewConfig(config.clone()).script());
+        self.config = Some(config);
         log::info!("Lean infoview ready");
         self.sync_page(cx);
+    }
+
+    fn update_config(&mut self, cx: &App) {
+        let config = &LeanInfoviewSettings::get_global(cx).config;
+        if self.config.as_ref() == Some(config) {
+            return;
+        }
+        self.config = Some(config.clone());
+        self.send(InfoviewCall::ChangedInfoviewConfig(config.clone()));
+    }
+
+    /// Writes the config to the user's settings, as vscode-lean4 does. The settings
+    /// change then reaches the page.
+    fn save_config(&self, config: Value, cx: &App) -> Result<()> {
+        let config: InfoviewConfig =
+            serde_json::from_value(config).context("invalid infoview config")?;
+        settings::update_settings_file(
+            self.project.read(cx).fs().clone(),
+            cx,
+            move |settings, _| {
+                config.write_to(
+                    settings
+                        .lean
+                        .get_or_insert_default()
+                        .infoview
+                        .get_or_insert_default(),
+                )
+            },
+        );
+        Ok(())
+    }
+
+    /// Reads the `workspace` state that earlier sessions stored, on first use.
+    fn load_workspace_state(&mut self, container: StateContainer, cx: &App) {
+        if container != StateContainer::Workspace || self.workspace_state_key.is_some() {
+            return;
+        }
+        let key = workspace_state_key(&self.project, cx);
+        let stored = KeyValueStore::global(cx)
+            .read_kvp(&key)
+            .context("reading the Lean infoview's workspace state")
+            .and_then(|stored| {
+                stored
+                    .map(|stored| serde_json::from_str(&stored))
+                    .transpose()
+                    .context("parsing the Lean infoview's workspace state")
+            });
+        match stored {
+            Ok(Some(entries)) => self.host.load_workspace_state(entries),
+            Ok(None) => {}
+            Err(error) => log::error!("{error:#}"),
+        }
+        self.workspace_state_key = Some(key);
+    }
+
+    fn store_workspace_state(&self, container: StateContainer) {
+        if container != StateContainer::Workspace {
+            return;
+        }
+        let Some(key) = self.workspace_state_key.clone() else {
+            return;
+        };
+        match serde_json::to_string(&self.host.workspace_state()) {
+            Ok(entries) => {
+                self.state_writes.unbounded_send((key, entries)).ok();
+            }
+            Err(error) => {
+                log::error!("failed to encode the Lean infoview's workspace state: {error}")
+            }
+        }
     }
 
     fn handle_call(
@@ -657,11 +746,10 @@ impl LeanInfoviewPanel {
         cx: &mut Context<Self>,
     ) {
         let result = match call {
-            EditorCall::SaveConfig { config } => {
-                self.config = Some(config.clone());
-                self.send(InfoviewCall::ChangedInfoviewConfig(config));
-                Ok(Value::Null)
-            }
+            EditorCall::SaveConfig { config } => self
+                .save_config(config, cx)
+                .map(|()| Value::Null)
+                .map_err(CallError::from),
             EditorCall::SendClientRequest {
                 uri,
                 method,
@@ -718,17 +806,24 @@ impl LeanInfoviewPanel {
                 self.host.close_rpc_session(&session_id);
                 Ok(Value::Null)
             }
-            EditorCall::ReadState { container, key } => Ok(self.host.read_state(container, key)),
+            EditorCall::ReadState { container, key } => {
+                self.load_workspace_state(container, cx);
+                Ok(self.host.read_state(container, key))
+            }
             EditorCall::SaveState {
                 container,
                 key,
                 value,
             } => {
+                self.load_workspace_state(container, cx);
                 self.host.save_state(container, key, value);
+                self.store_workspace_state(container);
                 Ok(Value::Null)
             }
             EditorCall::DeleteState { container, key } => {
+                self.load_workspace_state(container, cx);
                 self.host.delete_state(container, key);
+                self.store_workspace_state(container);
                 Ok(Value::Null)
             }
         };
@@ -918,6 +1013,21 @@ fn add_entries(
         });
     }
     menu
+}
+
+/// Like VS Code's workspace state, the infoview's `workspace` entries belong to a set of
+/// folders.
+fn workspace_state_key(project: &Entity<Project>, cx: &App) -> String {
+    let mut roots: Vec<String> = project
+        .read(cx)
+        .visible_worktrees(cx)
+        .map(|worktree| worktree.read(cx).abs_path().to_string_lossy().into_owned())
+        .collect();
+    roots.sort();
+    format!(
+        "lean_infoview_workspace_state:{}",
+        serde_json::Value::from(roots)
+    )
 }
 
 fn active_editor(workspace: &Workspace, cx: &App) -> Option<Entity<Editor>> {

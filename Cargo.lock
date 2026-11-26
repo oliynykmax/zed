@@ -10007,6 +10007,7 @@ dependencies = [
  "anyhow",
  "block2 0.6.2",
  "collections",
+ "db",
  "editor",
  "futures 0.3.34",
  "gpui",

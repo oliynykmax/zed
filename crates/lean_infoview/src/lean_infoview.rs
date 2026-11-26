@@ -14,6 +14,8 @@ mod panel;
 #[cfg(target_os = "macos")]
 mod protocol;
 #[cfg(target_os = "macos")]
+mod settings;
+#[cfg(target_os = "macos")]
 mod theme_css;
 #[cfg(target_os = "macos")]
 mod web_view;

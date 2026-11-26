@@ -9,7 +9,7 @@ use project::lsp_store::lean_ext::{
     NotificationDirection, ObservedNotification, RpcKeepAliveParams, RpcSessionId,
 };
 use serde::Deserialize;
-use serde_json::{Value, value::RawValue};
+use serde_json::{Map, Value, value::RawValue};
 
 use crate::protocol::{InfoviewCall, StateContainer};
 
@@ -163,6 +163,24 @@ impl HostState {
 
     pub fn delete_state(&mut self, container: StateContainer, key: String) {
         self.persistent_state.remove(&(container, key));
+    }
+
+    /// Adds `workspace` entries stored by an earlier session, keeping newer ones.
+    pub fn load_workspace_state(&mut self, entries: Map<String, Value>) {
+        for (key, value) in entries {
+            self.persistent_state
+                .entry((StateContainer::Workspace, key))
+                .or_insert(value);
+        }
+    }
+
+    /// The `workspace` entries, to store for later sessions.
+    pub fn workspace_state(&self) -> Map<String, Value> {
+        self.persistent_state
+            .iter()
+            .filter(|((container, _), _)| *container == StateContainer::Workspace)
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect()
     }
 }
 
@@ -434,6 +452,40 @@ mod tests {
         host.delete_state(StateContainer::Workspace, "k".into());
         assert_eq!(
             host.read_state(StateContainer::Workspace, "k".into()),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn carries_workspace_state_to_a_later_session() {
+        let mut earlier = HostState::default();
+        earlier.save_state(StateContainer::Workspace, "pinned".into(), json!([1, 2]));
+        earlier.save_state(StateContainer::Workspace, "gone".into(), json!(true));
+        earlier.delete_state(StateContainer::Workspace, "gone".into());
+        earlier.save_state(StateContainer::Infoview, "page".into(), json!(3));
+        assert_eq!(
+            Value::Object(earlier.workspace_state()),
+            json!({"pinned": [1, 2]})
+        );
+
+        let mut later = HostState::default();
+        later.save_state(StateContainer::Workspace, "pinned".into(), json!("newer"));
+        later.load_workspace_state(
+            json!({"pinned": [1, 2], "other": 4})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(
+            later.read_state(StateContainer::Workspace, "pinned".into()),
+            json!({"value": "newer"})
+        );
+        assert_eq!(
+            later.read_state(StateContainer::Workspace, "other".into()),
+            json!({"value": 4})
+        );
+        assert_eq!(
+            later.read_state(StateContainer::Infoview, "page".into()),
             Value::Null
         );
     }

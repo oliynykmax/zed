@@ -138,6 +138,42 @@ pub struct ServerStoppedReason {
     pub reason: String,
 }
 
+/// The infoview's display settings, as `changedInfoviewConfig` and `saveConfig` carry them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoviewConfig {
+    pub all_errors_on_line: bool,
+    pub auto_open_shows_goal: bool,
+    pub debounce_time: u64,
+    pub expected_type_visibility: ExpectedTypeVisibility,
+    pub show_goal_names: bool,
+    pub emphasize_first_goal: bool,
+    pub reverse_tactic_state: bool,
+    pub hide_type_assumptions: bool,
+    pub hide_instance_assumptions: bool,
+    pub hide_inaccessible_assumptions: bool,
+    pub hide_let_values: bool,
+    pub show_tooltip_on_hover: bool,
+    pub message_order: MessageOrder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExpectedTypeVisibility {
+    #[serde(rename = "Expanded by default")]
+    ExpandedByDefault,
+    #[serde(rename = "Collapsed by default")]
+    CollapsedByDefault,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageOrder {
+    #[serde(rename = "Sort by proximity to text cursor")]
+    SortByProximityToCursor,
+    #[serde(rename = "Sort by message location")]
+    SortByMessageLocation,
+}
+
 /// An infoview command that the editor triggers, such as from a key binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,7 +201,7 @@ pub enum InfoviewCall {
     /// Carries the server's `InitializeResult`.
     ServerRestarted(Value),
     ServerStopped(Option<ServerStoppedReason>),
-    ChangedInfoviewConfig(Value),
+    ChangedInfoviewConfig(InfoviewConfig),
     RequestedAction(InfoviewActionKind),
     ClickedContextMenu {
         entry: ContextMenuEntry,
@@ -380,6 +416,36 @@ mod tests {
                     key: "k".into(),
                 },
             }
+        );
+    }
+
+    #[test]
+    fn reads_the_infoview_config() {
+        let config: InfoviewConfig = serde_json::from_value(json!({
+            "allErrorsOnLine": true,
+            "autoOpenShowsGoal": true,
+            "debounceTime": 50,
+            "expectedTypeVisibility": "Collapsed by default",
+            "showGoalNames": true,
+            "emphasizeFirstGoal": false,
+            "reverseTacticState": false,
+            "hideTypeAssumptions": true,
+            "hideInstanceAssumptions": false,
+            "hideInaccessibleAssumptions": false,
+            "hideLetValues": false,
+            "showTooltipOnHover": true,
+            "messageOrder": "Sort by message location",
+        }))
+        .unwrap();
+        assert_eq!(
+            config.expected_type_visibility,
+            ExpectedTypeVisibility::CollapsedByDefault
+        );
+        assert_eq!(config.message_order, MessageOrder::SortByMessageLocation);
+        assert!(config.hide_type_assumptions);
+        assert_eq!(
+            serde_json::to_value(&config).unwrap()["expectedTypeVisibility"],
+            json!("Collapsed by default")
         );
     }
 
