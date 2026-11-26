@@ -117,6 +117,9 @@ pub struct LeanInfoviewPanel {
     host: HostState,
     servers: HashMap<LanguageServerId, ServerTap>,
     cursor: Option<CursorSource>,
+    /// The active editor while its language is unknown, so the panel can follow it once
+    /// that turns out to be Lean.
+    pending_editor: Option<Subscription>,
     /// The config last sent to the page.
     config: Option<InfoviewConfig>,
     /// The key-value store key of the infoview's `workspace` state, once read from it.
@@ -276,6 +279,7 @@ impl LeanInfoviewPanel {
             host: HostState::default(),
             servers: HashMap::default(),
             cursor: None,
+            pending_editor: None,
             config: None,
             workspace_state_key: None,
             state_writes,
@@ -359,11 +363,22 @@ impl LeanInfoviewPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(editor) = editor else {
+            self.pending_editor = None;
             return;
         };
         if lean_selection(editor.read(cx), cx).is_none() {
+            // Zed can detect a file's language after its editor becomes active.
+            self.pending_editor =
+                Some(
+                    cx.subscribe_in(&editor, window, |panel, editor, event, window, cx| {
+                        if let EditorEvent::Reparsed(_) = event {
+                            panel.follow_editor(Some(editor.clone()), window, cx);
+                        }
+                    }),
+                );
             return;
         }
+        self.pending_editor = None;
         if self
             .cursor
             .as_ref()
