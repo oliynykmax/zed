@@ -164,6 +164,7 @@ impl Handler {
             let request: Retained<AnyObject> = msg_send![task, request];
             let url: Option<Retained<NSURL>> = msg_send![&*request, URL];
             let Some(url) = url else {
+                fail(task);
                 return;
             };
             let path = url.path().map(|path| path.to_string()).unwrap_or_default();
@@ -190,6 +191,7 @@ impl Handler {
                 headerFields: &*headers
             ];
             let Some(response) = response else {
+                fail(task);
                 return;
             };
             let data = NSData::with_bytes(&resource.bytes);
@@ -197,6 +199,22 @@ impl Handler {
             let _: () = msg_send![task, didReceiveData: &*data];
             let _: () = msg_send![task, didFinish];
         }
+    }
+}
+
+/// # Safety
+///
+/// `task` must be a live `WKURLSchemeTask` that has not finished, on the main thread.
+unsafe fn fail(task: &AnyObject) {
+    const NS_URL_ERROR_UNKNOWN: isize = -1;
+    unsafe {
+        let error: Retained<AnyObject> = msg_send![
+            class!(NSError),
+            errorWithDomain: &*NSString::from_str("NSURLErrorDomain"),
+            code: NS_URL_ERROR_UNKNOWN,
+            userInfo: std::ptr::null::<AnyObject>()
+        ];
+        let _: () = msg_send![task, didFailWithError: &*error];
     }
 }
 
