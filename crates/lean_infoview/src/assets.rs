@@ -18,6 +18,7 @@ macro_rules! asset {
 const ASSETS: &[Asset] = &[
     asset!("index.html", "text/html; charset=utf-8"),
     asset!("bridge.js", "text/javascript; charset=utf-8"),
+    asset!("base.css", "text/css; charset=utf-8"),
     asset!("vendor/index.css", "text/css; charset=utf-8"),
     asset!("vendor/codicon.ttf", "font/ttf"),
     asset!(
