@@ -132,7 +132,11 @@ impl Rewriter {
                     ChangeEffect::Untrackable => false,
                 }
             });
-            if track_new && !absorbed && change.new_text == config.leader {
+            if track_new
+                && !absorbed
+                && !config.leader.is_empty()
+                && change.new_text == config.leader
+            {
                 self.tracked.push(Tracked {
                     leader_start: change.range.start,
                     leader_len: config.leader.len(),
@@ -309,6 +313,21 @@ mod tests {
         let mut typist = Typist::new(config(), "");
         typist.type_text(text);
         typist.state()
+    }
+
+    #[test]
+    fn an_empty_leader_starts_no_abbreviation() {
+        let mut typist = Typist::new(
+            Config {
+                leader: String::new(),
+                ..config()
+            },
+            "abc",
+        );
+        typist.backspace();
+        typist.type_text("alpha ");
+        assert_eq!(typist.state(), "abalpha |");
+        assert!(typist.pending().is_empty());
     }
 
     #[test]
