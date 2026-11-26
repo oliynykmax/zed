@@ -16,7 +16,7 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, Pixels, Render, Subscription, Task, WeakEntity, Window,
     anchored, canvas, deferred, div, point, prelude::*, px,
 };
-use language::{Buffer, LocalFile as _, Point, PointUtf16, ToPointUtf16 as _, Unclipped};
+use language::{Buffer, LocalFile as _, Point, ToPointUtf16 as _};
 use lsp::{LanguageServer, LanguageServerId};
 use project::{
     Project,
@@ -44,6 +44,7 @@ use crate::{
     CopyToComment, ToggleAllMessages, ToggleExpectedType, ToggleInfoview, TogglePaused, TogglePin,
     assets,
     context_menu::{MenuGroup, OfferedEntry, offered_entries},
+    edits::utf16_point,
     host::{HostState, RpcSession},
     protocol::{
         CallError, CallId, CallResult, EditorCall, InfoviewActionKind, InfoviewCall,
@@ -1114,13 +1115,6 @@ fn page_appearance(cx: &App) -> PageAppearance {
     }
 }
 
-fn utf16_point(position: lsp::Position, snapshot: &text::BufferSnapshot) -> Point {
-    snapshot.point_utf16_to_point(snapshot.clip_point_utf16(
-        Unclipped(PointUtf16::new(position.line, position.character)),
-        text::Bias::Left,
-    ))
-}
-
 async fn apply_workspace_edit(
     project: Entity<Project>,
     edit: lsp::WorkspaceEdit,
@@ -1133,18 +1127,7 @@ async fn apply_workspace_edit(
         let buffer = project
             .update(cx, |project, cx| project.open_local_buffer(path, cx))
             .await?;
-        buffer.update(cx, |buffer, cx| {
-            let snapshot = buffer.snapshot();
-            let edits: Vec<_> = edits
-                .into_iter()
-                .map(|edit| {
-                    let start = utf16_point(edit.range.start, &snapshot);
-                    let end = utf16_point(edit.range.end, &snapshot);
-                    (start..end, edit.new_text)
-                })
-                .collect();
-            buffer.edit(edits, None, cx);
-        });
+        buffer.update(cx, |buffer, cx| crate::edits::apply(buffer, edits, cx));
     }
     Ok(())
 }
