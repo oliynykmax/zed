@@ -54,7 +54,8 @@ The infoview build is committed in `assets/vendor`, so building Zed needs no Nod
 
 ## Not done yet
 
-- The VS Code context menu items (go to definition, pin, pause, copy state) and the infoview's own commands.
-- `lean4.infoview.*` settings. Saved infoview settings last until Zed quits.
-- Restart File restarts the whole Lean server, not only the file.
-- Remote projects.
+- macOS only. The panel is a `WKWebView`.
+- Local projects only. Remote projects get no infoview.
+- Changing a display setting does not repaint the goals already shown. This is a limit of the upstream infoview.
+- No custom CSS for the infoview.
+- The lines the server is still processing are marked in the gutter only, not in the scrollbar.
