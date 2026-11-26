@@ -968,28 +968,41 @@ impl LeanInfoviewPanel {
         let editor = self
             .cursor
             .as_ref()
-            .and_then(|cursor| cursor.editor.upgrade())
-            .context("no Lean editor to insert into")?;
-        editor.update(cx, |editor, cx| -> Result<()> {
-            let (buffer, selection) =
-                lean_selection(editor, cx).context("the editor shows no Lean file")?;
-            let snapshot = buffer.read(cx).snapshot();
-            let point = match &position {
-                Some(position) => utf16_point(position.position, &snapshot),
-                None => text::ToPoint::to_point(&selection.end, &snapshot),
-            };
-            let (at, text) = match kind {
-                TextInsertKind::Here => (point, text),
-                TextInsertKind::Above => {
-                    let indent = " ".repeat(snapshot.indent_size_for_line(point.row).len as usize);
-                    let text = text.replace('\n', &format!("\n{indent}"));
-                    (Point::new(point.row, 0), format!("{indent}{text}\n"))
-                }
-            };
-            buffer.update(cx, |buffer, cx| buffer.edit([(at..at, text)], None, cx));
-            Ok(())
-        })?;
-        window.focus(&editor.focus_handle(cx), cx);
+            .and_then(|cursor| cursor.editor.upgrade());
+        let (buffer, point) = match position {
+            Some(position) => {
+                let buffer = open_buffer(&self.project, &position.text_document.uri, cx)
+                    .context("the file is not open")?;
+                let point = utf16_point(position.position, &buffer.read(cx).snapshot());
+                (buffer, point)
+            }
+            None => {
+                let editor = editor.as_ref().context("no Lean editor to insert into")?;
+                let (buffer, selection) =
+                    lean_selection(editor.read(cx), cx).context("the editor shows no Lean file")?;
+                let point = text::ToPoint::to_point(&selection.end, &buffer.read(cx).snapshot());
+                (buffer, point)
+            }
+        };
+        let (at, text) = match kind {
+            TextInsertKind::Here => (point, text),
+            TextInsertKind::Above => {
+                let indent = buffer
+                    .read(cx)
+                    .snapshot()
+                    .indent_size_for_line(point.row)
+                    .len as usize;
+                let indent = " ".repeat(indent);
+                let text = text.replace('\n', &format!("\n{indent}"));
+                (Point::new(point.row, 0), format!("{indent}{text}\n"))
+            }
+        };
+        buffer.update(cx, |buffer, cx| buffer.edit([(at..at, text)], None, cx));
+        if let Some(editor) = editor
+            && editor.read(cx).buffer().read(cx).as_singleton() == Some(buffer)
+        {
+            window.focus(&editor.focus_handle(cx), cx);
+        }
         Ok(())
     }
 
