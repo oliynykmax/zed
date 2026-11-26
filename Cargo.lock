@@ -9993,6 +9993,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lean_infoview"
+version = "0.1.0"
+
+[[package]]
 name = "leb128"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Copies the pinned @leanprover/infoview build into assets/vendor, which Zed embeds.
+set -euo pipefail
+
+version="0.15.0"
+integrity="sha512-/WxSohVVK87yS1qx7Y4RL5q6SrMLqMsmxeO2I8YLLLLP6L/3sA5XgSuzr9rRf3HvSOR9mbazEIRZq8G3UVsgfA=="
+
+crate="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+out="$crate/assets/vendor"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+(cd "$work" && npm pack --silent "@leanprover/infoview@$version" > /dev/null)
+tarball="$work/leanprover-infoview-$version.tgz"
+actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 | tr -d '\n')"
+if [[ "$actual" != "$integrity" ]]; then
+    echo "integrity mismatch for @leanprover/infoview@$version: $actual" >&2
+    exit 1
+fi
+tar -xzf "$tarball" -C "$work"
+
+rm -rf "$out"
+mkdir -p "$out"
+for file in \
+    index.production.min.js \
+    loader.production.min.js \
+    react.production.min.js \
+    react-dom.production.min.js \
+    react-jsx-runtime.production.min.js \
+    index.css \
+    codicon.ttf; do
+    cp "$work/package/dist/$file" "$out/$file"
+done
+cp "$work/package/package.json" "$out/package.json"
