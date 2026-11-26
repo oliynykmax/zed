@@ -73,6 +73,56 @@ impl lsp::notification::Notification for RpcKeepAlive {
     const METHOD: &'static str = "$/lean/rpc/keepAlive";
 }
 
+/// The parts of a document that the Lean server is still processing. An empty list
+/// means it has finished.
+pub enum LeanFileProgress {}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeanFileProgressParams {
+    pub text_document: lsp::VersionedTextDocumentIdentifier,
+    pub processing: Vec<LeanFileProgressProcessingInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct LeanFileProgressProcessingInfo {
+    pub range: lsp::Range,
+    #[serde(default)]
+    pub kind: LeanFileProgressKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(from = "u8", into = "u8")]
+pub enum LeanFileProgressKind {
+    #[default]
+    Processing,
+    /// The server stopped processing the file, for example because an import failed to build.
+    FatalError,
+}
+
+impl From<u8> for LeanFileProgressKind {
+    fn from(kind: u8) -> Self {
+        match kind {
+            2 => Self::FatalError,
+            _ => Self::Processing,
+        }
+    }
+}
+
+impl From<LeanFileProgressKind> for u8 {
+    fn from(kind: LeanFileProgressKind) -> Self {
+        match kind {
+            LeanFileProgressKind::Processing => 1,
+            LeanFileProgressKind::FatalError => 2,
+        }
+    }
+}
+
+impl lsp::notification::Notification for LeanFileProgress {
+    type Params = LeanFileProgressParams;
+    const METHOD: &'static str = "$/lean/fileProgress";
+}
+
 /// `textDocument/didOpen`, with how the Lean server builds the file's outdated imports.
 pub enum LeanDidOpen {}
 
@@ -364,6 +414,31 @@ mod tests {
             Some(InfoviewNotification::RpcRelease)
         );
         assert_eq!(InfoviewNotification::from_method("$/lean/rpc/call"), None);
+    }
+
+    #[test]
+    fn reads_file_progress_kinds() {
+        let params: LeanFileProgressParams = serde_json::from_str(
+            r#"{"textDocument":{"uri":"file:///a.lean","version":3},"processing":[
+                {"range":{"start":{"line":1,"character":0},"end":{"line":4,"character":0}}},
+                {"range":{"start":{"line":5,"character":0},"end":{"line":5,"character":2}},"kind":2},
+                {"range":{"start":{"line":6,"character":0},"end":{"line":6,"character":0}},"kind":1}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(params.text_document.version, 3);
+        assert_eq!(
+            params
+                .processing
+                .iter()
+                .map(|info| (info.range.start.line, info.kind))
+                .collect::<Vec<_>>(),
+            [
+                (1, LeanFileProgressKind::Processing),
+                (5, LeanFileProgressKind::FatalError),
+                (6, LeanFileProgressKind::Processing),
+            ]
+        );
     }
 
     #[test]

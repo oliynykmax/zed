@@ -370,21 +370,7 @@ mod tests {
 
     #[gpui::test]
     async fn hovers_how_to_type_a_symbol_next_to_the_server_hover(cx: &mut TestAppContext) {
-        init_test(cx, |_| {});
-        let lean = Language::new(
-            LanguageConfig {
-                name: "Lean 4".into(),
-                matcher: language::LanguageMatcher {
-                    path_suffixes: vec!["lean".into()],
-                    ..Default::default()
-                }
-                .into(),
-                ..LanguageConfig::default()
-            },
-            None,
-        );
-        let mut cx = EditorLspTestContext::new(
-            lean,
+        let mut cx = crate::lean_ext::lean_lsp_test_context(
             lsp::ServerCapabilities {
                 hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
                 ..Default::default()

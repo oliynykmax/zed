@@ -203,38 +203,45 @@ async fn request_plain_goal(
 }
 
 #[cfg(test)]
+pub(crate) async fn lean_lsp_test_context(
+    capabilities: lsp::ServerCapabilities,
+    cx: &mut gpui::TestAppContext,
+) -> crate::test::editor_lsp_test_context::EditorLspTestContext {
+    crate::editor_tests::init_test(cx, |_| {});
+    let lean = Language::new(
+        language::LanguageConfig {
+            name: "Lean 4".into(),
+            matcher: language::LanguageMatcher {
+                path_suffixes: vec!["lean".into()],
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        },
+        None,
+    );
+    crate::test::editor_lsp_test_context::EditorLspTestContext::new_with_adapter(
+        lean,
+        language::FakeLspAdapter {
+            name: "lean4-lsp",
+            capabilities,
+            ..Default::default()
+        },
+        cx,
+    )
+    .await
+}
+
+#[cfg(test)]
 mod tests {
     use gpui::TestAppContext;
-    use language::{FakeLspAdapter, LanguageConfig, LanguageMatcher};
     use project::lsp_store::lean_ext::{DependencyBuildMode, LeanDidOpen};
 
     use super::*;
-    use crate::{editor_tests::init_test, test::editor_lsp_test_context::EditorLspTestContext};
 
     #[gpui::test]
     async fn restart_file_reopens_the_document_in_the_lean_server(cx: &mut TestAppContext) {
-        init_test(cx, |_| {});
-        let lean = Language::new(
-            LanguageConfig {
-                name: "Lean 4".into(),
-                matcher: LanguageMatcher {
-                    path_suffixes: vec!["lean".into()],
-                    ..Default::default()
-                }
-                .into(),
-                ..LanguageConfig::default()
-            },
-            None,
-        );
-        let mut cx = EditorLspTestContext::new_with_adapter(
-            lean,
-            FakeLspAdapter {
-                name: "lean4-lsp",
-                ..FakeLspAdapter::default()
-            },
-            cx,
-        )
-        .await;
+        let mut cx = lean_lsp_test_context(Default::default(), cx).await;
         cx.set_state("theorem t : True := ˇtrivial");
         cx.run_until_parked();
 
