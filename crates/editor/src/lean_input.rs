@@ -71,6 +71,14 @@ pub(crate) fn init(cx: &mut App) {
         if !editor.mode().is_full() {
             return;
         }
+        let Some(buffer) = editor.buffer().read(cx).as_singleton() else {
+            return;
+        };
+        editor.register_addon(LeanInput {
+            version: buffer.read(cx).version(),
+            buffer,
+            rewriter: Rewriter::default(),
+        });
         cx.subscribe_in(&cx.entity(), window, |editor, _, event, window, cx| {
             if matches!(
                 event,
@@ -103,29 +111,23 @@ enum Due {
 /// replacements that are due.
 fn update(editor: &mut Editor, due: Due, window: &mut Window, cx: &mut Context<Editor>) {
     let settings = LeanInputSettings::get_global(cx);
-    let buffer = editor.buffer().read(cx).as_singleton().filter(|buffer| {
-        buffer
-            .read(cx)
-            .language()
-            .is_some_and(|language| is_lean_language(language))
-    });
-    let Some(buffer) = buffer.filter(|_| settings.enabled) else {
-        if editor.addon::<LeanInput>().is_some() {
-            editor.unregister_addon::<LeanInput>();
+    let config = settings.config.clone();
+    let enabled = settings.enabled;
+    let Some(input) = editor.addon_mut::<LeanInput>() else {
+        return;
+    };
+    let buffer = input.buffer.clone();
+    let is_lean = buffer
+        .read(cx)
+        .language()
+        .is_some_and(|language| is_lean_language(language));
+    if !enabled || !is_lean {
+        input.version = buffer.read(cx).version();
+        if !input.rewriter.is_empty() {
+            input.rewriter = Rewriter::default();
             editor.clear_highlights(HighlightKey::LeanAbbreviation, cx);
         }
         return;
-    };
-    let config = settings.config.clone();
-    if editor
-        .addon::<LeanInput>()
-        .is_none_or(|input| input.buffer != buffer)
-    {
-        editor.register_addon(LeanInput {
-            version: buffer.read(cx).version(),
-            buffer: buffer.clone(),
-            rewriter: Rewriter::default(),
-        });
     }
 
     let display_snapshot = editor.display_snapshot(cx);
@@ -305,6 +307,13 @@ mod tests {
         cx.assert_editor_state("α ˇ");
         cx.simulate_input("\\to x \\\\ \\<>");
         cx.assert_editor_state("α → x \\ ⟨ˇ⟩");
+    }
+
+    #[gpui::test]
+    async fn replaces_the_first_abbreviation_typed_in_a_new_editor(cx: &mut TestAppContext) {
+        let mut cx = lean_editor(cx).await;
+        cx.simulate_input("\\alpha ");
+        cx.assert_editor_state("α ˇ");
     }
 
     #[gpui::test]
