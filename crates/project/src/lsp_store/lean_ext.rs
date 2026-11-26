@@ -160,7 +160,8 @@ impl InfoviewNotification {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NotificationDirection {
     FromServer,
     FromClient,

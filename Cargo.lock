@@ -9995,6 +9995,14 @@ dependencies = [
 [[package]]
 name = "lean_infoview"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "collections",
+ "lsp",
+ "project",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "leb128"
