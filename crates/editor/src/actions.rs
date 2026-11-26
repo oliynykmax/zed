@@ -861,6 +861,8 @@ actions!(
         ShowWordCompletions,
         /// Randomly shuffles selected lines.
         ShuffleLines,
+        /// Opens a live view of the Lean 4 goal state at the cursor.
+        ShowLeanGoal,
         /// Navigates to the next signature in the signature help popup.
         SignatureHelpNext,
         /// Navigates to the previous signature in the signature help popup.

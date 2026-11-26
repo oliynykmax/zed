@@ -19,6 +19,7 @@ pub mod emmet_ext;
 mod folding_ranges;
 mod inlay_hints;
 pub mod json_language_server_ext;
+pub mod lean_ext;
 pub mod log_store;
 pub mod lsp_ext_command;
 pub mod rust_analyzer_ext;
