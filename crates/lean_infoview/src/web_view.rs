@@ -81,26 +81,65 @@ define_class!(
             const CANCEL: isize = 0;
             const ALLOW: isize = 1;
             // SAFETY: WebKit passes a live `WKNavigationAction`.
-            let url = unsafe { navigation_url(action) };
-            match url.filter(|url| is_web_link(url)) {
-                Some(url) => {
+            let navigation = unsafe { navigation(action) };
+            match navigation {
+                Navigation::Allow => decision_handler.call((ALLOW,)),
+                Navigation::Cancel => decision_handler.call((CANCEL,)),
+                Navigation::OpenInBrowser(url) => {
                     self.ivars().events.unbounded_send(WebViewEvent::Link(url)).ok();
                     decision_handler.call((CANCEL,));
                 }
-                None => decision_handler.call((ALLOW,)),
             }
+        }
+
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        fn web_content_process_did_terminate(&self, web_view: &AnyObject) {
+            log::warn!("Lean infoview's web content process terminated, reloading");
+            // SAFETY: WebKit passes the live `WKWebView` on the main thread.
+            let _: Option<Retained<AnyObject>> = unsafe { msg_send![web_view, reload] };
         }
     }
 );
 
+#[derive(Debug, PartialEq)]
+enum Navigation {
+    Allow,
+    Cancel,
+    OpenInBrowser(String),
+}
+
 /// # Safety
 ///
 /// `action` must be a live `WKNavigationAction`.
-unsafe fn navigation_url(action: &AnyObject) -> Option<String> {
+unsafe fn navigation(action: &AnyObject) -> Navigation {
+    const LINK_ACTIVATED: isize = 0;
     unsafe {
         let request: Retained<AnyObject> = msg_send![action, request];
         let url: Option<Retained<NSURL>> = msg_send![&*request, URL];
-        Some(url?.absoluteString()?.to_string())
+        let url = url
+            .and_then(|url| url.absoluteString())
+            .map(|url| url.to_string());
+        // A nil target frame is a request for a new window.
+        let frame: Option<Retained<AnyObject>> = msg_send![action, targetFrame];
+        let main_frame = frame.is_none_or(|frame| msg_send![&*frame, isMainFrame]);
+        let navigation_type: isize = msg_send![action, navigationType];
+        decide(
+            url.as_deref(),
+            main_frame,
+            navigation_type == LINK_ACTIVATED,
+        )
+    }
+}
+
+/// Keeps the main frame on the page, and sends web links the user clicks to the browser.
+fn decide(url: Option<&str>, main_frame: bool, link_activated: bool) -> Navigation {
+    if !main_frame {
+        return Navigation::Allow;
+    }
+    match url {
+        Some(url) if url.split('#').next() == Some(PAGE_URL) => Navigation::Allow,
+        Some(url) if link_activated && is_web_link(url) => Navigation::OpenInBrowser(url.into()),
+        _ => Navigation::Cancel,
     }
 }
 
@@ -266,13 +305,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sends_only_web_links_to_the_browser() {
-        assert!(is_web_link(
-            "https://leanprover-community.github.io/mathlib4_docs"
-        ));
-        assert!(is_web_link("mailto:someone@example.com"));
-        assert!(!is_web_link("zed-lean-infoview://infoview/index.html"));
-        assert!(!is_web_link("about:blank"));
-        assert!(!is_web_link("blob:zed-lean-infoview://infoview/1234"));
+    fn keeps_the_main_frame_on_the_page() {
+        let page = "zed-lean-infoview://infoview/index.html";
+        let docs = "https://leanprover-community.github.io/mathlib4_docs";
+        assert_eq!(decide(Some(page), true, false), Navigation::Allow);
+        assert_eq!(
+            decide(Some(&format!("{page}#top")), true, true),
+            Navigation::Allow
+        );
+        assert_eq!(
+            decide(Some(docs), true, true),
+            Navigation::OpenInBrowser(docs.into())
+        );
+        assert_eq!(
+            decide(Some("mailto:someone@example.com"), true, true),
+            Navigation::OpenInBrowser("mailto:someone@example.com".into())
+        );
+        assert_eq!(decide(Some(docs), true, false), Navigation::Cancel);
+        assert_eq!(
+            decide(
+                Some("zed-lean-infoview://infoview/nowhere.html"),
+                true,
+                true
+            ),
+            Navigation::Cancel
+        );
+        assert_eq!(decide(Some("about:blank"), true, false), Navigation::Cancel);
+        assert_eq!(decide(None, true, true), Navigation::Cancel);
+        assert_eq!(decide(Some(docs), false, false), Navigation::Allow);
+        assert_eq!(decide(Some(docs), false, true), Navigation::Allow);
     }
 }
